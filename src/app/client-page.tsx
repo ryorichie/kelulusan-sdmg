@@ -9,44 +9,73 @@ import { checkNis } from './actions'
 import { Student } from '@prisma/client'
 import confetti from 'canvas-confetti'
 
-const playSuspenseAudio = () => {
-  const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-  if (!AudioContext) return () => {};
-  const ctx = new AudioContext();
-  
-  // Create rumbling noise buffer
-  const bufferSize = ctx.sampleRate * 4; // 4 seconds
-  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < bufferSize; i++) {
-    data[i] = Math.random() * 2 - 1;
-  }
-  const noiseSource = ctx.createBufferSource();
-  noiseSource.buffer = buffer;
-  
-  // Lowpass filter to make it a deep rumble
-  const filter = ctx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.frequency.value = 100;
-  
-  // Gain node for volume crescendo
-  const gainNode = ctx.createGain();
-  gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(1.5, ctx.currentTime + 3.8);
-  gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 4);
+const playSuspenseAudio = (): Promise<void> => {
+  return new Promise((resolve) => {
+    const audio = new Audio('/drumroll.mp3');
+    let hasResolved = false;
 
-  noiseSource.connect(filter);
-  filter.connect(gainNode);
-  gainNode.connect(ctx.destination);
+    const doResolve = () => {
+      if (!hasResolved) {
+        hasResolved = true;
+        resolve();
+      }
+    };
+
+    audio.onended = doResolve;
+    
+    // If the file is missing
+    audio.onerror = () => {
+      setTimeout(doResolve, 3000);
+    };
+
+    audio.play().catch(e => {
+      console.error("Audio play failed (browser might block autoplay)", e);
+      // Fallback 3 seconds if audio fails to play automatically
+      setTimeout(doResolve, 3000);
+    });
+  });
+}
+
+const playSuccessAudio = () => {
+  const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContext) return;
+  const ctx = new AudioContext();
+
+  const playChord = (frequencies: number[], startTime: number, duration: number) => {
+    frequencies.forEach(freq => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(0.3, startTime + 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    });
+  }
+
+  // Play a "Tada!" chord (C Major)
+  playChord([523.25, 659.25, 783.99, 1046.50], ctx.currentTime, 2);
   
-  noiseSource.start();
-  
-  return () => {
-    try {
-      noiseSource.stop();
-      ctx.close();
-    } catch(e) {}
-  };
+  // Confetti "pop" sound
+  const popOsc = ctx.createOscillator();
+  const popGain = ctx.createGain();
+  popOsc.type = 'sine';
+  popOsc.frequency.setValueAtTime(800, ctx.currentTime);
+  popOsc.frequency.exponentialRampToValueAtTime(50, ctx.currentTime + 0.1);
+  popGain.gain.setValueAtTime(1, ctx.currentTime);
+  popGain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+  popOsc.connect(popGain);
+  popGain.connect(ctx.destination);
+  popOsc.start();
+  popOsc.stop(ctx.currentTime + 0.1);
 }
 
 export default function ClientPage({ settings }: { settings: Record<string, string> }) {
@@ -54,15 +83,18 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
   const [status, setStatus] = useState<'idle' | 'suspense' | 'result'>('idle')
   const [result, setResult] = useState<Student | null>(null)
   const [error, setError] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const schoolName = settings['school_name'] || 'Pengumuman Kelulusan'
+  // Prefer Settings URL, but if empty, it will rely on the local file /logo.png below
   const schoolLogo = settings['school_logo']
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!nis.trim()) return
+    if (!nis.trim() || isSubmitting || status !== 'idle') return
 
     setError('')
+    setIsSubmitting(true)
     
     try {
       const student = await checkNis(nis)
@@ -71,21 +103,23 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
         
         // Enter suspense mode!
         setStatus('suspense')
-        const stopAudio = playSuspenseAudio()
+        
+        // Wait for the drumroll to finish completely!
+        await playSuspenseAudio()
 
-        // Wait 4 seconds for maximum tension
-        setTimeout(() => {
-          setStatus('result')
-          if (student.isGraduated) {
-            triggerConfetti()
-          }
-        }, 4000)
+        setStatus('result')
+        if (student.isGraduated) {
+          triggerConfetti()
+          playSuccessAudio()
+        }
 
       } else {
         setError('Nomor Induk Siswa (NIS) tidak ditemukan.')
       }
     } catch (err) {
       setError('Terjadi kesalahan. Silakan coba lagi.')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -124,13 +158,13 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
 
   return (
     <div className={`min-h-[100dvh] transition-colors duration-1000 flex flex-col items-center justify-center p-4 relative overflow-hidden ${
-      status === 'suspense' ? 'bg-slate-950' : 'bg-gradient-to-br from-slate-50 to-slate-100'
+      status === 'suspense' ? 'bg-slate-950' : 'bg-gradient-to-br from-amber-50 to-yellow-100'
     }`}>
       
       {/* Decorative background elements */}
       <div className={`absolute top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none transition-opacity duration-1000 ${status === 'suspense' ? 'opacity-10' : 'opacity-100'}`}>
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-blue-400/10 blur-[100px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-purple-400/10 blur-[100px]" />
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-amber-400/20 blur-[100px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-yellow-400/20 blur-[100px]" />
       </div>
 
       <AnimatePresence mode="wait">
@@ -144,10 +178,10 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
             className="w-full max-w-md"
           >
             <div className="bg-white/80 backdrop-blur-xl rounded-3xl p-6 sm:p-8 shadow-2xl border border-white/20 text-center">
-              {schoolLogo ? (
+              {schoolLogo || true ? (
                 <div className="mx-auto w-24 h-24 sm:w-28 sm:h-28 mb-4">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={schoolLogo} alt="School Logo" className="w-full h-full object-contain" />
+                  <img src={schoolLogo || '/logo.png'} alt="School Logo" className="w-full h-full object-contain" />
                 </div>
               ) : (
                 <div className="mx-auto w-16 h-16 sm:w-20 sm:h-20 bg-primary/10 text-primary rounded-full flex items-center justify-center mb-4 sm:mb-6">
@@ -170,7 +204,7 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
                     value={nis}
                     onChange={(e) => setNis(e.target.value)}
                     className="pl-12 h-14 text-lg rounded-2xl bg-slate-50/50 border-slate-200 focus-visible:ring-primary"
-                    disabled={status !== 'idle'}
+                    disabled={status !== 'idle' || isSubmitting}
                   />
                   <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
                 </div>
@@ -189,9 +223,9 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
                 <Button 
                   type="submit" 
                   className="w-full h-14 text-lg rounded-2xl font-medium transition-all"
-                  disabled={status !== 'idle' || !nis.trim()}
+                  disabled={status !== 'idle' || isSubmitting || !nis.trim()}
                 >
-                  Cek Hasil
+                  {isSubmitting ? 'Mencari...' : 'Cek Hasil'}
                 </Button>
               </form>
             </div>
@@ -209,14 +243,15 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
               y: [0, 4, -4, 4, -4, 0]
             }}
             transition={{ 
-              duration: 0.1, 
-              repeat: Infinity,
-              repeatType: 'mirror'
+              x: { duration: 0.1, repeat: Infinity, repeatType: 'mirror' },
+              y: { duration: 0.1, repeat: Infinity, repeatType: 'mirror' },
+              scale: { duration: 0.3 },
+              opacity: { duration: 0.3 }
             }}
-            className="w-full max-w-md text-center flex flex-col items-center"
+            className="w-full max-w-md text-center flex flex-col items-center justify-center py-12"
           >
-            <div className="w-24 h-24 rounded-full border-4 border-slate-700 border-t-slate-300 animate-spin mb-8" />
-            <h2 className="text-2xl font-bold text-slate-300 tracking-widest animate-pulse">
+            <div className="w-24 h-24 rounded-full border-4 border-amber-500/30 border-t-amber-500 animate-spin mb-8" />
+            <h2 className="text-2xl font-bold text-slate-300 tracking-widest">
               MENGAMBIL DATA...
             </h2>
           </motion.div>
@@ -239,12 +274,11 @@ export default function ClientPage({ settings }: { settings: Record<string, stri
                 result.isGraduated ? 'bg-green-500' : 'bg-slate-300'
               }`} />
 
-              {schoolLogo && (
-                 <div className="mx-auto w-16 h-16 mb-4">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={schoolLogo} alt="School Logo" className="w-full h-full object-contain" />
-                </div>
-              )}
+              {/* Result Logo */}
+              <div className="mx-auto w-16 h-16 mb-4">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={schoolLogo || '/logo.png'} alt="School Logo" className="w-full h-full object-contain" />
+              </div>
 
               <div className="mb-6 mt-2">
                 <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-1">

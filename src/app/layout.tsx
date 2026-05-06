@@ -15,6 +15,10 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Pengumuman Kelulusan SD/SMP/SMA",
   description: "Web pengumuman kelulusan siswa dengan UI yang modern dan responsif.",
+  icons: {
+    icon: '/logo.png',
+    apple: '/logo.png',
+  }
 };
 
 import { Toaster } from "@/components/ui/sonner";
